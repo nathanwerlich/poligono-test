@@ -56,6 +56,7 @@ textarea{
   font-family:var(--mono); font-size:12px; line-height:1.5;
 }
 .out-block{display:flex; flex-direction:column; gap:8px; padding:14px 16px; border-top:1px solid var(--line); flex:1; min-height:0}
+#outQuery{flex:none; min-height:110px}
 .in-block{display:flex; flex-direction:column; gap:8px; padding:14px 16px; flex:1; min-height:0}
 .row{display:flex; gap:8px; align-items:center; justify-content:space-between}
 .status{font-size:12px; color:var(--accent); min-height:16px}
@@ -117,11 +118,25 @@ textarea{
 
     <div class="out-block">
       <div class="row">
-        <h2 style="margin:0">Variables da mutation salvarPoligonoTerritorio</h2>
-        <button id="btnCopy">Copiar</button>
+        <h2 style="margin:0">Mutation completa (cole direto na única caixa do GraphiQL)</h2>
+        <button id="btnCopyInline">Copiar</button>
       </div>
-      <textarea id="outJson" readonly placeholder="Desenhe um polígono à esquerda e feche-o para ver as variables aqui."></textarea>
+      <textarea id="outInline" readonly placeholder="Desenhe um polígono à esquerda e feche-o para ver a mutation aqui." rows="12"></textarea>
       <span class="status" id="copyStatus"></span>
+
+      <details style="margin-top:4px">
+        <summary style="cursor:pointer; font-size:12px; color:var(--muted)">Meu GraphiQL tem aba de Query e de Variables separadas</summary>
+        <div class="row" style="margin-top:8px">
+          <h2 style="margin:0">Query</h2>
+          <button id="btnCopyQuery">Copiar</button>
+        </div>
+        <textarea id="outQuery" readonly rows="6"></textarea>
+        <div class="row" style="margin-top:6px">
+          <h2 style="margin:0">Variables</h2>
+          <button id="btnCopyVars">Copiar</button>
+        </div>
+        <textarea id="outJson" readonly></textarea>
+      </details>
     </div>
 
     <div class="in-block">
@@ -260,11 +275,31 @@ document.getElementById('btnReset').onclick = () => {
   syncBoundsInputs(); render();
 };
 
+const MUTATION_QUERY = `mutation SalvarPoligono($input: SalvarPoligonoTerritorioInput!) {
+  salvarPoligonoTerritorio(input: $input)
+}`;
+document.getElementById('outQuery').value = MUTATION_QUERY;
+
 function buildGeometry(){
   if (points.length < 3 || !closed) return null;
   const ring = points.map(p => [p[0], p[1]]);
   ring.push(ring[0]); // fecha o anel (RFC 7946)
-  return { type: 'Polygon', coordinates: [ring] };
+  const polygon = { type: 'Polygon', coordinates: [ring] };
+  // O backend exige geoJson como FeatureCollection (TB_GEOJSON_COLLECTION / TB_GEOJSON_FEATURE)
+  // O backend exige name e bbox no FeatureCollection.
+  const lonMin = Math.min(...ring.map(p => p[0]));
+  const lonMax = Math.max(...ring.map(p => p[0]));
+  const latMin = Math.min(...ring.map(p => p[1]));
+  const latMax = Math.max(...ring.map(p => p[1]));
+
+  return {
+    type: 'FeatureCollection',
+    name: document.getElementById('fNome').value.trim() || 'Polígono',
+    bbox: [lonMin, latMin, lonMax, latMax],
+    features: [
+      { type: 'Feature', properties: {}, geometry: polygon }
+    ]
+  };
 }
 
 function buildVariables(){
@@ -283,26 +318,52 @@ function buildVariables(){
   return { input };
 }
 
+function buildInlineMutation(vars){
+  if (!vars) return '';
+  const inp = vars.input;
+  const lines = [];
+  if (inp.id !== undefined) lines.push(`    id: ${JSON.stringify(String(inp.id))}`);
+  lines.push(`    nome: ${JSON.stringify(inp.nome)}`);
+  lines.push(`    descricao: ${JSON.stringify(inp.descricao)}`);
+  if (inp.visibilidade) lines.push(`    visibilidade: ${inp.visibilidade}`); // enum: sem aspas
+  lines.push(`    geoJson: ${JSON.stringify(inp.geoJson)}`); // string com o GeoJSON já escapado
+  return `mutation {\n  salvarPoligonoTerritorio(input: {\n${lines.join('\n')}\n  })\n}`;
+}
+
 function updateOutput(){
   const vars = buildVariables();
   document.getElementById('outJson').value = vars ? JSON.stringify(vars, null, 2) : '';
+  document.getElementById('outInline').value = buildInlineMutation(vars);
 }
 ['fId','fNome','fDescricao','fVisibilidade'].forEach(id =>
   document.getElementById(id).addEventListener('input', updateOutput)
 );
 
-document.getElementById('btnCopy').onclick = async () => {
-  const txt = document.getElementById('outJson').value;
+async function copyText(text, statusMsg){
   const s = document.getElementById('copyStatus');
-  if (!txt){ s.textContent = 'Nada para copiar ainda.'; s.className='status err'; return; }
   try {
-    await navigator.clipboard.writeText(txt);
-    s.textContent = 'Copiado.'; s.className = 'status';
+    await navigator.clipboard.writeText(text);
+    s.textContent = statusMsg; s.className = 'status';
   } catch(e){
-    document.getElementById('outJson').select();
-    document.execCommand('copy');
-    s.textContent = 'Copiado (seleção manual).'; s.className = 'status';
+    s.textContent = 'Não foi possível copiar automaticamente — selecione e copie manualmente.';
+    s.className = 'status err';
   }
+}
+
+document.getElementById('btnCopyInline').onclick = () => {
+  const txt = document.getElementById('outInline').value;
+  if (!txt){ document.getElementById('copyStatus').textContent = 'Feche um polígono primeiro.'; document.getElementById('copyStatus').className='status err'; return; }
+  copyText(txt, 'Mutation copiada — cole direto na caixa do GraphiQL.');
+};
+
+document.getElementById('btnCopyQuery').onclick = () => {
+  copyText(document.getElementById('outQuery').value, 'Query copiada.');
+};
+
+document.getElementById('btnCopyVars').onclick = () => {
+  const txt = document.getElementById('outJson').value;
+  if (!txt){ document.getElementById('copyStatus').textContent = 'Nada para copiar ainda.'; document.getElementById('copyStatus').className='status err'; return; }
+  copyText(txt, 'Variables copiadas.');
 };
 
 function extractPolygonRing(raw){
