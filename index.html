@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Editor de Polígono de Território (teste local)</title>
+<style>
+:root{
+  --bg:#0f1512; --panel:#161f1a; --line:#2a3830; --grid:#22302a;
+  --ink:#e9f0ea; --muted:#93a89b; --accent:#7fd88f; --accent-ink:#0b1a0f;
+  --mono: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  box-sizing: border-box;
+}
+*{box-sizing:border-box}
+html{height:100%; scroll-padding-top: env(safe-area-inset-top, 0px);}
+body{
+  height:100%; margin:0; background:var(--bg); color:var(--ink);
+  font-family:var(--sans); display:flex; flex-direction:column;
+}
+header{
+  padding:14px 18px; border-bottom:1px solid var(--line);
+  display:flex; align-items:baseline; gap:10px; flex-wrap:wrap;
+}
+header h1{font-size:16px; margin:0; font-weight:600; letter-spacing:.2px}
+header span{color:var(--muted); font-size:12.5px}
+main{
+  flex:1; display:grid; grid-template-columns: 1.3fr 1fr; gap:1px;
+  background:var(--line); min-height:0;
+}
+@media (max-width: 860px){ main{ grid-template-columns: 1fr; } }
+section{background:var(--bg); display:flex; flex-direction:column; min-height:0}
+.pad{padding:14px 16px}
+.toolbar{display:flex; gap:8px; flex-wrap:wrap; align-items:center; padding:10px 16px; border-bottom:1px solid var(--line)}
+button{
+  background:var(--panel); color:var(--ink); border:1px solid var(--line);
+  padding:7px 12px; border-radius:6px; font-size:13px; cursor:pointer; font-family:var(--sans);
+}
+button:hover{border-color:var(--accent)}
+button.primary{background:var(--accent); color:var(--accent-ink); border-color:var(--accent); font-weight:600}
+button:disabled{opacity:.4; cursor:not-allowed}
+.canvas-wrap{flex:1; position:relative; min-height:320px}
+svg{width:100%; height:100%; display:block; touch-action:none; cursor:crosshair}
+.bounds{display:flex; gap:10px; flex-wrap:wrap; padding:8px 16px; border-top:1px solid var(--line); font-size:12px; color:var(--muted)}
+.bounds label{display:flex; flex-direction:column; gap:3px}
+.bounds input{width:100px; background:var(--panel); color:var(--ink); border:1px solid var(--line); border-radius:4px; padding:4px 6px; font-family:var(--mono); font-size:12px}
+.fields{display:flex; flex-direction:column; gap:10px}
+.fields label{font-size:12px; color:var(--muted); display:flex; flex-direction:column; gap:4px}
+.fields input{background:var(--panel); border:1px solid var(--line); color:var(--ink); border-radius:5px; padding:7px 9px; font-size:13.5px; font-family:var(--sans)}
+h2{font-size:12.5px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin:0 0 10px; font-weight:600}
+textarea{
+  width:100%; flex:1; min-height:160px; resize:vertical; background:var(--panel);
+  color:var(--ink); border:1px solid var(--line); border-radius:6px; padding:10px;
+  font-family:var(--mono); font-size:12px; line-height:1.5;
+}
+.out-block{display:flex; flex-direction:column; gap:8px; padding:14px 16px; border-top:1px solid var(--line); flex:1; min-height:0}
+.in-block{display:flex; flex-direction:column; gap:8px; padding:14px 16px; flex:1; min-height:0}
+.row{display:flex; gap:8px; align-items:center; justify-content:space-between}
+.status{font-size:12px; color:var(--accent); min-height:16px}
+.status.err{color:#e08a7d}
+.pts{font-size:11.5px; color:var(--muted); font-family:var(--mono); padding:0 16px 10px}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Editor de polígono de território</h1>
+  <span>ferramenta local — clique no mapa para criar os vértices e gerar o GeoJSON do polígono</span>
+</header>
+
+<main>
+  <section>
+    <div class="toolbar">
+      <button id="btnUndo">Desfazer ponto</button>
+      <button id="btnClear">Limpar</button>
+      <button id="btnClose" class="primary">Fechar polígono</button>
+      <span class="status" id="drawStatus"></span>
+    </div>
+    <div class="canvas-wrap">
+      <svg id="svg" viewBox="0 0 600 500" preserveAspectRatio="xMidYMid meet"></svg>
+    </div>
+    <div class="pts" id="ptsList"></div>
+    <div class="bounds">
+      <label>lon mín <input id="lonMin" type="number" step="0.001"></label>
+      <label>lon máx <input id="lonMax" type="number" step="0.001"></label>
+      <label>lat mín <input id="latMin" type="number" step="0.001"></label>
+      <label>lat máx <input id="latMax" type="number" step="0.001"></label>
+      <button id="btnApplyBounds">Aplicar</button>
+      <button id="btnReset">Padrão (Florianópolis)</button>
+    </div>
+  </section>
+
+  <section>
+    <div class="pad fields">
+      <h2>Metadados (opcional, só para montar o payload de exemplo)</h2>
+      <label>Nome do polígono
+        <input id="fNome" placeholder="Ex.: Microárea 3 — Beco do Sol">
+      </label>
+      <label>ID da unidade de saúde ou equipe (livre, só para teste)
+        <input id="fVinculo" placeholder="Ex.: equipe-4521">
+      </label>
+    </div>
+
+    <div class="out-block">
+      <div class="row">
+        <h2 style="margin:0">GeoJSON gerado</h2>
+        <div style="display:flex; gap:8px">
+          <label style="display:flex; align-items:center; gap:5px; font-size:12px; color:var(--muted)">
+            <input type="checkbox" id="asFeature" checked> como Feature
+          </label>
+          <button id="btnCopy">Copiar</button>
+        </div>
+      </div>
+      <textarea id="outJson" readonly placeholder="Desenhe um polígono à esquerda e feche-o para ver o GeoJSON aqui."></textarea>
+      <span class="status" id="copyStatus"></span>
+    </div>
+
+    <div class="in-block">
+      <div class="row">
+        <h2 style="margin:0">Colar GeoJSON existente</h2>
+        <button id="btnLoad" class="primary">Desenhar no mapa</button>
+      </div>
+      <textarea id="inJson" placeholder='Cole aqui um Polygon, Feature ou FeatureCollection e clique em "Desenhar no mapa".'></textarea>
+      <span class="status" id="loadStatus"></span>
+    </div>
+  </section>
+</main>
+
+<script>
+const svg = document.getElementById('svg');
+const NS = 'http://www.w3.org/2000/svg';
+const VB_W = 600, VB_H = 500;
+
+let bounds = { lonMin:-48.60, lonMax:-48.50, latMin:-27.65, latMax:-27.55 };
+let points = []; // [[lon,lat], ...]
+let closed = false;
+
+function syncBoundsInputs(){
+  document.getElementById('lonMin').value = bounds.lonMin;
+  document.getElementById('lonMax').value = bounds.lonMax;
+  document.getElementById('latMin').value = bounds.latMin;
+  document.getElementById('latMax').value = bounds.latMax;
+}
+syncBoundsInputs();
+
+function lonLatToSvg(lon, lat){
+  const x = ((lon - bounds.lonMin) / (bounds.lonMax - bounds.lonMin)) * VB_W;
+  const y = VB_H - ((lat - bounds.latMin) / (bounds.latMax - bounds.latMin)) * VB_H;
+  return [x, y];
+}
+function svgToLonLat(x, y){
+  const lon = bounds.lonMin + (x / VB_W) * (bounds.lonMax - bounds.lonMin);
+  const lat = bounds.latMin + ((VB_H - y) / VB_H) * (bounds.latMax - bounds.latMin);
+  return [round6(lon), round6(lat)];
+}
+function round6(n){ return Math.round(n * 1e6) / 1e6; }
+
+function el(tag, attrs){
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  return e;
+}
+
+function drawGrid(){
+  const g = el('g', {});
+  const steps = 8;
+  for (let i=0;i<=steps;i++){
+    const x = (i/steps)*VB_W;
+    const y = (i/steps)*VB_H;
+    g.appendChild(el('line', {x1:x,y1:0,x2:x,y2:VB_H, stroke:'var(--grid)', 'stroke-width':1}));
+    g.appendChild(el('line', {x1:0,y1:y,x2:VB_W,y2:y, stroke:'var(--grid)', 'stroke-width':1}));
+    const lon = bounds.lonMin + (i/steps)*(bounds.lonMax-bounds.lonMin);
+    const lat = bounds.latMax - (i/steps)*(bounds.latMax-bounds.latMin);
+    if (i>0 && i<steps){
+      const lx = el('text', {x:x+3, y:VB_H-4, fill:'var(--muted)', 'font-size':9, 'font-family':'var(--mono)'});
+      lx.textContent = lon.toFixed(3);
+      g.appendChild(lx);
+      const ly = el('text', {x:3, y:y-3, fill:'var(--muted)', 'font-size':9, 'font-family':'var(--mono)'});
+      ly.textContent = lat.toFixed(3);
+      g.appendChild(ly);
+    }
+  }
+  return g;
+}
+
+function render(){
+  svg.innerHTML = '';
+  svg.appendChild(drawGrid());
+
+  if (points.length > 1){
+    const pts = points.map(p => lonLatToSvg(p[0], p[1]).join(',')).join(' ');
+    if (closed){
+      svg.appendChild(el('polygon', {points:pts, fill:'var(--accent)', 'fill-opacity':0.22, stroke:'var(--accent)', 'stroke-width':2}));
+    } else {
+      svg.appendChild(el('polyline', {points:pts, fill:'none', stroke:'var(--accent)', 'stroke-width':2}));
+    }
+  }
+  points.forEach((p, i) => {
+    const [x,y] = lonLatToSvg(p[0], p[1]);
+    const c = el('circle', {cx:x, cy:y, r:5, fill: i===0 ? 'var(--accent)' : 'var(--panel)', stroke:'var(--accent)', 'stroke-width':2});
+    svg.appendChild(c);
+  });
+
+  document.getElementById('ptsList').textContent = points.length
+    ? points.map((p,i)=>`${i+1}: [${p[0]}, ${p[1]}]`).join('   ')
+    : 'Nenhum vértice ainda.';
+
+  document.getElementById('btnClose').disabled = points.length < 3 || closed;
+  document.getElementById('btnUndo').disabled = points.length === 0 || closed;
+
+  updateOutput();
+}
+
+svg.addEventListener('click', (ev) => {
+  if (closed) return;
+  const rect = svg.getBoundingClientRect();
+  const x = ((ev.clientX - rect.left) / rect.width) * VB_W;
+  const y = ((ev.clientY - rect.top) / rect.height) * VB_H;
+  points.push(svgToLonLat(x, y));
+  render();
+});
+
+document.getElementById('btnUndo').onclick = () => { points.pop(); render(); };
+document.getElementById('btnClear').onclick = () => { points = []; closed = false; setDrawStatus(''); render(); };
+document.getElementById('btnClose').onclick = () => {
+  if (points.length < 3) return;
+  closed = true;
+  setDrawStatus('Polígono fechado. GeoJSON pronto à direita.');
+  render();
+};
+
+function setDrawStatus(msg, isErr){
+  const s = document.getElementById('drawStatus');
+  s.textContent = msg || '';
+  s.className = 'status' + (isErr ? ' err' : '');
+}
+
+document.getElementById('btnApplyBounds').onclick = () => {
+  const lonMin = parseFloat(document.getElementById('lonMin').value);
+  const lonMax = parseFloat(document.getElementById('lonMax').value);
+  const latMin = parseFloat(document.getElementById('latMin').value);
+  const latMax = parseFloat(document.getElementById('latMax').value);
+  if ([lonMin,lonMax,latMin,latMax].some(isNaN) || lonMin>=lonMax || latMin>=latMax){
+    setDrawStatus('Limites inválidos.', true); return;
+  }
+  bounds = {lonMin,lonMax,latMin,latMax};
+  render();
+};
+document.getElementById('btnReset').onclick = () => {
+  bounds = { lonMin:-48.60, lonMax:-48.50, latMin:-27.65, latMax:-27.55 };
+  syncBoundsInputs(); render();
+};
+
+function buildGeoJson(){
+  if (points.length < 3 || !closed) return null;
+  const ring = points.map(p => [p[0], p[1]]);
+  ring.push(ring[0]); // fecha o anel (RFC 7946)
+  const geometry = { type: 'Polygon', coordinates: [ring] };
+  const asFeature = document.getElementById('asFeature').checked;
+  if (!asFeature) return geometry;
+  const nome = document.getElementById('fNome').value.trim();
+  const vinculo = document.getElementById('fVinculo').value.trim();
+  return {
+    type: 'Feature',
+    properties: {
+      nome: nome || null,
+      vinculo: vinculo || null
+    },
+    geometry
+  };
+}
+
+function updateOutput(){
+  const gj = buildGeoJson();
+  document.getElementById('outJson').value = gj ? JSON.stringify(gj, null, 2) : '';
+}
+document.getElementById('asFeature').addEventListener('change', updateOutput);
+document.getElementById('fNome').addEventListener('input', updateOutput);
+document.getElementById('fVinculo').addEventListener('input', updateOutput);
+
+document.getElementById('btnCopy').onclick = async () => {
+  const txt = document.getElementById('outJson').value;
+  const s = document.getElementById('copyStatus');
+  if (!txt){ s.textContent = 'Nada para copiar ainda.'; s.className='status err'; return; }
+  try {
+    await navigator.clipboard.writeText(txt);
+    s.textContent = 'Copiado.'; s.className = 'status';
+  } catch(e){
+    document.getElementById('outJson').select();
+    document.execCommand('copy');
+    s.textContent = 'Copiado (seleção manual).'; s.className = 'status';
+  }
+};
+
+function extractPolygonRing(input){
+  let obj = input;
+  if (obj.type === 'FeatureCollection'){
+    if (!obj.features || !obj.features.length) throw new Error('FeatureCollection sem features.');
+    obj = obj.features[0];
+  }
+  if (obj.type === 'Feature'){
+    if (!obj.geometry) throw new Error('Feature sem geometry.');
+    if (obj.properties){
+      if (obj.properties.nome) document.getElementById('fNome').value = obj.properties.nome;
+      if (obj.properties.vinculo) document.getElementById('fVinculo').value = obj.properties.vinculo;
+    }
+    obj = obj.geometry;
+  }
+  if (obj.type !== 'Polygon') throw new Error('Só Polygon é suportado (recebido: ' + obj.type + ').');
+  if (!obj.coordinates || !obj.coordinates[0] || obj.coordinates[0].length < 4){
+    throw new Error('Coordinates do Polygon inválidas.');
+  }
+  const ring = obj.coordinates[0];
+  const first = ring[0], last = ring[ring.length-1];
+  const pts = (first[0]===last[0] && first[1]===last[1]) ? ring.slice(0,-1) : ring.slice();
+  return pts.map(c => [round6(c[0]), round6(c[1])]);
+}
+
+document.getElementById('btnLoad').onclick = () => {
+  const raw = document.getElementById('inJson').value.trim();
+  const s = document.getElementById('loadStatus');
+  if (!raw){ s.textContent = 'Cole um GeoJSON primeiro.'; s.className='status err'; return; }
+  try {
+    const parsed = JSON.parse(raw);
+    const pts = extractPolygonRing(parsed);
+    let lonMin = Math.min(...pts.map(p=>p[0])), lonMax = Math.max(...pts.map(p=>p[0]));
+    let latMin = Math.min(...pts.map(p=>p[1])), latMax = Math.max(...pts.map(p=>p[1]));
+    const padLon = Math.max((lonMax-lonMin)*0.15, 0.001);
+    const padLat = Math.max((latMax-latMin)*0.15, 0.001);
+    bounds = { lonMin: lonMin-padLon, lonMax: lonMax+padLon, latMin: latMin-padLat, latMax: latMax+padLat };
+    syncBoundsInputs();
+    points = pts;
+    closed = true;
+    render();
+    s.textContent = `Polígono carregado com ${pts.length} vértices.`; s.className='status';
+    setDrawStatus('');
+  } catch(e){
+    s.textContent = 'Erro: ' + e.message; s.className='status err';
+  }
+};
+
+render();
+</script>
+</body>
+</html>
