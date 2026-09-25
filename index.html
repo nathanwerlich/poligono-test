@@ -283,23 +283,51 @@ document.getElementById('outQuery').value = MUTATION_QUERY;
 function buildGeometry(){
   if (points.length < 3 || !closed) return null;
   const ring = points.map(p => [p[0], p[1]]);
-  ring.push(ring[0]); // fecha o anel (RFC 7946)
-  const polygon = { type: 'Polygon', coordinates: [ring] };
-  // O backend exige geoJson como FeatureCollection (TB_GEOJSON_COLLECTION / TB_GEOJSON_FEATURE)
-  // O backend exige name e bbox no FeatureCollection.
-  const lonMin = Math.min(...ring.map(p => p[0]));
-  const lonMax = Math.max(...ring.map(p => p[0]));
-  const latMin = Math.min(...ring.map(p => p[1]));
-  const latMax = Math.max(...ring.map(p => p[1]));
+  ring.push(ring[0]); // fecha o anel
 
-  return {
+  const polygon = { type: 'Polygon', coordinates: [ring] };
+
+  const fNome = document.getElementById('fNome').value.trim();
+  const fDescricao = document.getElementById('fDescricao').value.trim();
+  const fId = document.getElementById('fId').value.trim();
+
+  const lons = ring.map(p => p[0]);
+  const lats = ring.map(p => p[1]);
+  const bbox = [
+    Math.min(...lons), Math.min(...lats),
+    Math.max(...lons), Math.max(...lats)
+  ];
+
+  // O backend salva DS_METADADOS com todos os membros que NÃO
+  // pertencem ao conjunto padrão de FeatureCollection/Feature.
+  // Portanto, descricao é enviada como foreign member.
+  const collection = {
     type: 'FeatureCollection',
-    name: document.getElementById('fNome').value.trim() || 'Polígono',
-    bbox: [lonMin, latMin, lonMax, latMax],
-    features: [
-      { type: 'Feature', properties: {}, geometry: polygon }
-    ]
+    name: fNome,
+    bbox,
+    descricao: fDescricao,
+    features: []
   };
+
+  const feature = {
+    type: 'Feature',
+    properties: {
+      nome: fNome,
+      descricao: fDescricao
+    },
+    bbox,
+    geometry: polygon
+  };
+
+  // DS_GEOJSON_ID vem diretamente de Feature.id.
+  // Se o usuário não informar um ID, usamos o nome como fallback.
+  feature.id = fId || fNome;
+
+  // Também cria DS_METADADOS da Feature através de foreign member.
+  feature.descricao = fDescricao;
+
+  collection.features.push(feature);
+  return collection;
 }
 
 function buildVariables(){
@@ -345,6 +373,22 @@ async function copyText(text, statusMsg){
     await navigator.clipboard.writeText(text);
     s.textContent = statusMsg; s.className = 'status';
   } catch(e){
+    // Fallback para arquivos locais (file://), onde clipboard API pode ser bloqueada.
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      const ok = document.execCommand('copy');
+      ta.remove();
+      if (ok) {
+        s.textContent = statusMsg; s.className = 'status';
+        return;
+      }
+    } catch (_) {}
     s.textContent = 'Não foi possível copiar automaticamente — selecione e copie manualmente.';
     s.className = 'status err';
   }
