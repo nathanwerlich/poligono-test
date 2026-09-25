@@ -48,7 +48,7 @@ svg{width:100%; height:100%; display:block; touch-action:none; cursor:crosshair}
 .bounds input{width:100px; background:var(--panel); color:var(--ink); border:1px solid var(--line); border-radius:4px; padding:4px 6px; font-family:var(--mono); font-size:12px}
 .fields{display:flex; flex-direction:column; gap:10px}
 .fields label{font-size:12px; color:var(--muted); display:flex; flex-direction:column; gap:4px}
-.fields input{background:var(--panel); border:1px solid var(--line); color:var(--ink); border-radius:5px; padding:7px 9px; font-size:13.5px; font-family:var(--sans)}
+.fields input, .fields select{background:var(--panel); border:1px solid var(--line); color:var(--ink); border-radius:5px; padding:7px 9px; font-size:13.5px; font-family:var(--sans)}
 h2{font-size:12.5px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin:0 0 10px; font-weight:600}
 textarea{
   width:100%; flex:1; min-height:160px; resize:vertical; background:var(--panel);
@@ -94,35 +94,42 @@ textarea{
 
   <section>
     <div class="pad fields">
-      <h2>Metadados (opcional, só para montar o payload de exemplo)</h2>
-      <label>Nome do polígono
+      <h2>SalvarPoligonoTerritorioInput</h2>
+      <label>id (deixe vazio para criar; preencha para editar)
+        <input id="fId" placeholder="Ex.: 123">
+      </label>
+      <label>nome *
         <input id="fNome" placeholder="Ex.: Microárea 3 — Beco do Sol">
       </label>
-      <label>ID da unidade de saúde ou equipe (livre, só para teste)
-        <input id="fVinculo" placeholder="Ex.: equipe-4521">
+      <label>descricao *
+        <input id="fDescricao" placeholder="Ex.: Área de cobertura da ACS Fulana">
+      </label>
+      <label>visibilidade
+        <select id="fVisibilidade">
+          <option value="">(não enviar)</option>
+          <option value="AUTOR">AUTOR</option>
+          <option value="EQUIPE" selected>EQUIPE</option>
+          <option value="UNIDADE_SAUDE">UNIDADE_SAUDE</option>
+          <option value="TODOS">TODOS</option>
+        </select>
       </label>
     </div>
 
     <div class="out-block">
       <div class="row">
-        <h2 style="margin:0">GeoJSON gerado</h2>
-        <div style="display:flex; gap:8px">
-          <label style="display:flex; align-items:center; gap:5px; font-size:12px; color:var(--muted)">
-            <input type="checkbox" id="asFeature" checked> como Feature
-          </label>
-          <button id="btnCopy">Copiar</button>
-        </div>
+        <h2 style="margin:0">Variables da mutation salvarPoligonoTerritorio</h2>
+        <button id="btnCopy">Copiar</button>
       </div>
-      <textarea id="outJson" readonly placeholder="Desenhe um polígono à esquerda e feche-o para ver o GeoJSON aqui."></textarea>
+      <textarea id="outJson" readonly placeholder="Desenhe um polígono à esquerda e feche-o para ver as variables aqui."></textarea>
       <span class="status" id="copyStatus"></span>
     </div>
 
     <div class="in-block">
       <div class="row">
-        <h2 style="margin:0">Colar GeoJSON existente</h2>
+        <h2 style="margin:0">Colar GeoJSON ou variables existentes</h2>
         <button id="btnLoad" class="primary">Desenhar no mapa</button>
       </div>
-      <textarea id="inJson" placeholder='Cole aqui um Polygon, Feature ou FeatureCollection e clique em "Desenhar no mapa".'></textarea>
+      <textarea id="inJson" placeholder='Cole aqui um Polygon/Feature/FeatureCollection, ou as variables { "input": {...} } com geoJson, e clique em "Desenhar no mapa".'></textarea>
       <span class="status" id="loadStatus"></span>
     </div>
   </section>
@@ -253,32 +260,36 @@ document.getElementById('btnReset').onclick = () => {
   syncBoundsInputs(); render();
 };
 
-function buildGeoJson(){
+function buildGeometry(){
   if (points.length < 3 || !closed) return null;
   const ring = points.map(p => [p[0], p[1]]);
   ring.push(ring[0]); // fecha o anel (RFC 7946)
-  const geometry = { type: 'Polygon', coordinates: [ring] };
-  const asFeature = document.getElementById('asFeature').checked;
-  if (!asFeature) return geometry;
+  return { type: 'Polygon', coordinates: [ring] };
+}
+
+function buildVariables(){
+  const geometry = buildGeometry();
+  if (!geometry) return null;
+  const id = document.getElementById('fId').value.trim();
   const nome = document.getElementById('fNome').value.trim();
-  const vinculo = document.getElementById('fVinculo').value.trim();
-  return {
-    type: 'Feature',
-    properties: {
-      nome: nome || null,
-      vinculo: vinculo || null
-    },
-    geometry
-  };
+  const descricao = document.getElementById('fDescricao').value.trim();
+  const visibilidade = document.getElementById('fVisibilidade').value;
+  const input = {};
+  if (id) input.id = id;
+  input.nome = nome;
+  input.descricao = descricao;
+  if (visibilidade) input.visibilidade = visibilidade;
+  input.geoJson = JSON.stringify(geometry); // geoJson é String! no schema: vai como texto
+  return { input };
 }
 
 function updateOutput(){
-  const gj = buildGeoJson();
-  document.getElementById('outJson').value = gj ? JSON.stringify(gj, null, 2) : '';
+  const vars = buildVariables();
+  document.getElementById('outJson').value = vars ? JSON.stringify(vars, null, 2) : '';
 }
-document.getElementById('asFeature').addEventListener('change', updateOutput);
-document.getElementById('fNome').addEventListener('input', updateOutput);
-document.getElementById('fVinculo').addEventListener('input', updateOutput);
+['fId','fNome','fDescricao','fVisibilidade'].forEach(id =>
+  document.getElementById(id).addEventListener('input', updateOutput)
+);
 
 document.getElementById('btnCopy').onclick = async () => {
   const txt = document.getElementById('outJson').value;
@@ -294,8 +305,20 @@ document.getElementById('btnCopy').onclick = async () => {
   }
 };
 
-function extractPolygonRing(input){
-  let obj = input;
+function extractPolygonRing(raw){
+  let obj = raw;
+
+  // Suporta colar as variables inteiras: { "input": { nome, descricao, visibilidade, geoJson: "..." , id } }
+  if (obj && obj.input && typeof obj.input === 'object'){
+    const inp = obj.input;
+    if (inp.id != null) document.getElementById('fId').value = inp.id;
+    if (inp.nome != null) document.getElementById('fNome').value = inp.nome;
+    if (inp.descricao != null) document.getElementById('fDescricao').value = inp.descricao;
+    if (inp.visibilidade != null) document.getElementById('fVisibilidade').value = inp.visibilidade;
+    if (typeof inp.geoJson !== 'string') throw new Error('input.geoJson ausente ou não é string.');
+    obj = JSON.parse(inp.geoJson); // geoJson vem serializado como texto
+  }
+
   if (obj.type === 'FeatureCollection'){
     if (!obj.features || !obj.features.length) throw new Error('FeatureCollection sem features.');
     obj = obj.features[0];
@@ -304,7 +327,7 @@ function extractPolygonRing(input){
     if (!obj.geometry) throw new Error('Feature sem geometry.');
     if (obj.properties){
       if (obj.properties.nome) document.getElementById('fNome').value = obj.properties.nome;
-      if (obj.properties.vinculo) document.getElementById('fVinculo').value = obj.properties.vinculo;
+      if (obj.properties.descricao) document.getElementById('fDescricao').value = obj.properties.descricao;
     }
     obj = obj.geometry;
   }
