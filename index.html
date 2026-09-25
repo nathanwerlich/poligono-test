@@ -141,10 +141,10 @@ textarea{
 
     <div class="in-block">
       <div class="row">
-        <h2 style="margin:0">Colar GeoJSON ou variables existentes</h2>
+        <h2 style="margin:0">Colar GeoJSON, variables ou mutation</h2>
         <button id="btnLoad" class="primary">Desenhar no mapa</button>
       </div>
-      <textarea id="inJson" placeholder='Cole aqui um Polygon/Feature/FeatureCollection, ou as variables { "input": {...} } com geoJson, e clique em "Desenhar no mapa".'></textarea>
+      <textarea id="inJson" placeholder='Cole um Polygon/Feature/FeatureCollection, as variables { "input": {...} }, ou a mutation completa (salvarPoligonoTerritorio) e clique em "Desenhar no mapa".'></textarea>
       <span class="status" id="loadStatus"></span>
     </div>
   </section>
@@ -410,8 +410,58 @@ document.getElementById('btnCopyVars').onclick = () => {
   copyText(txt, 'Variables copiadas.');
 };
 
+function readGraphQLStringField(text, fieldName){
+  const re = new RegExp('\\b' + fieldName + '\\s*:\\s*"', 'm');
+  const match = re.exec(text);
+  if (!match) return null;
+
+  // Lê a string GraphQL até a aspas não escapada, preservando os escapes
+  // necessários para depois decodificá-la com JSON.parse.
+  let i = match.index + match[0].length;
+  let escaped = false;
+  let raw = '';
+  for (; i < text.length; i++){
+    const ch = text[i];
+    if (escaped){
+      raw += '\\' + ch;
+      escaped = false;
+      continue;
+    }
+    if (ch === '\\'){
+      escaped = true;
+      continue;
+    }
+    if (ch === '"') break;
+    raw += ch;
+  }
+  if (i >= text.length) throw new Error('String do campo ' + fieldName + ' não foi fechada.');
+  return JSON.parse('"' + raw + '"');
+}
+
+function extractMutationInput(text){
+  // Aceita a mutation completa, por exemplo:
+  // mutation { salvarPoligonoTerritorio(input: { ... geoJson: "{\"type\":...}" }) }
+  const geoJson = readGraphQLStringField(text, 'geoJson');
+  if (geoJson == null) throw new Error('Não encontrei o campo geoJson na mutation.');
+
+  const nome = readGraphQLStringField(text, 'nome');
+  const descricao = readGraphQLStringField(text, 'descricao');
+  if (nome != null) document.getElementById('fNome').value = nome;
+  if (descricao != null) document.getElementById('fDescricao').value = descricao;
+
+  const visMatch = /\bvisibilidade\s*:\s*([A-Za-z_][A-Za-z0-9_]*)/.exec(text);
+  if (visMatch) document.getElementById('fVisibilidade').value = visMatch[1];
+
+  return JSON.parse(geoJson);
+}
+
 function extractPolygonRing(raw){
   let obj = raw;
+
+  // Suporta colar a mutation GraphQL completa.
+  if (typeof obj === 'string'){
+    obj = extractMutationInput(obj);
+  }
 
   // Suporta colar as variables inteiras: { "input": { nome, descricao, visibilidade, geoJson: "..." , id } }
   if (obj && obj.input && typeof obj.input === 'object'){
@@ -449,9 +499,16 @@ function extractPolygonRing(raw){
 document.getElementById('btnLoad').onclick = () => {
   const raw = document.getElementById('inJson').value.trim();
   const s = document.getElementById('loadStatus');
-  if (!raw){ s.textContent = 'Cole um GeoJSON primeiro.'; s.className='status err'; return; }
+  if (!raw){ s.textContent = 'Cole um GeoJSON, variables ou mutation primeiro.'; s.className='status err'; return; }
   try {
-    const parsed = JSON.parse(raw);
+    let parsed;
+    try {
+      // Primeiro tenta JSON puro (GeoJSON ou variables).
+      parsed = JSON.parse(raw);
+    } catch (_) {
+      // Se não for JSON, trata o conteúdo como mutation GraphQL.
+      parsed = raw;
+    }
     const pts = extractPolygonRing(parsed);
     let lonMin = Math.min(...pts.map(p=>p[0])), lonMax = Math.max(...pts.map(p=>p[0]));
     let latMin = Math.min(...pts.map(p=>p[1])), latMax = Math.max(...pts.map(p=>p[1]));
